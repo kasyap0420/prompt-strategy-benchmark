@@ -42,6 +42,21 @@ class GeminiUnexpectedError(GeminiClientError):
     """Raised when an unexpected Gemini integration error occurs."""
 
 
+@dataclass(frozen=True, slots=True)
+class GeminiGeneration:
+    text: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+
+    def token_usage(self) -> dict[str, int | None]:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
+
 @dataclass(slots=True)
 class GeminiClient:
     api_key: str | None = settings.gemini_api_key
@@ -59,6 +74,10 @@ class GeminiClient:
 
     def generate_response(self, prompt: str) -> str:
         """Generate content with the synchronous Gemini SDK client."""
+        return self.generate_content(prompt).text
+
+    def generate_content(self, prompt: str) -> GeminiGeneration:
+        """Generate content and return text plus real provider token metadata when available."""
         cleaned_prompt = self._validate_prompt(prompt)
         client = self._create_client()
         try:
@@ -66,7 +85,7 @@ class GeminiClient:
                 model=self.model_name,
                 contents=cleaned_prompt,
             )
-            return self._extract_text(response)
+            return self._extract_generation(response)
         except Exception as exc:
             self._raise_client_error(exc)
         finally:
@@ -75,6 +94,11 @@ class GeminiClient:
 
     async def generate_response_async(self, prompt: str) -> str:
         """Generate content with a wall-clock timeout around the async SDK call."""
+        generation = await self.generate_content_async(prompt)
+        return generation.text
+
+    async def generate_content_async(self, prompt: str) -> GeminiGeneration:
+        """Generate content and return text plus real provider token metadata when available."""
         cleaned_prompt = self._validate_prompt(prompt)
         client = self._create_client()
         async_client = client.aio
@@ -86,7 +110,7 @@ class GeminiClient:
                 ),
                 timeout=self.timeout_seconds,
             )
-            return self._extract_text(response)
+            return self._extract_generation(response)
         except asyncio.TimeoutError as exc:
             raise GeminiTimeoutError(
                 f"Gemini request timed out after {self.timeout_seconds:g} seconds."
@@ -114,11 +138,27 @@ class GeminiClient:
             raise GeminiValidationError("Prompt cannot be empty.")
         return cleaned_prompt
 
+    def _extract_generation(self, response: Any) -> GeminiGeneration:
+        text = self._extract_text(response)
+        usage_metadata = getattr(response, "usage_metadata", None)
+        return GeminiGeneration(
+            text=text,
+            input_tokens=self._read_token_count(usage_metadata, "prompt_token_count"),
+            output_tokens=self._read_token_count(usage_metadata, "candidates_token_count"),
+            total_tokens=self._read_token_count(usage_metadata, "total_token_count"),
+        )
+
     def _extract_text(self, response: Any) -> str:
         text = getattr(response, "text", None)
         if not text:
             raise GeminiAPIRequestError("Gemini returned an empty response.")
         return text
+
+    def _read_token_count(self, usage_metadata: Any, field_name: str) -> int | None:
+        value = getattr(usage_metadata, field_name, None)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value if value >= 0 else None
 
     def _raise_client_error(self, exc: Exception) -> None:
         if isinstance(exc, GeminiClientError):

@@ -1,23 +1,45 @@
-from typing import Any
+import re
+from typing import Literal, Mapping
+
+BenchmarkStatus = Literal[
+    "success",
+    "timeout",
+    "api_error",
+    "validation_error",
+    "unexpected_error",
+]
+
+TOKEN_METRIC_KEYS = ("input_tokens", "output_tokens", "total_tokens")
 
 
-def calculate_latency_ms(start_time: float, end_time: float) -> float:
-    return round((end_time - start_time) * 1000, 3)
+def calculate_latency_ms(start_time: float, end_time: float) -> int:
+    return max(0, int(round((end_time - start_time) * 1000)))
 
 
-def extract_token_usage(response_metadata: dict[str, Any]) -> dict[str, int] | None:
-    """Return token usage from provider metadata when available."""
-    token_usage = response_metadata.get("token_usage")
-    return token_usage if isinstance(token_usage, dict) else None
+def calculate_response_length(response_text: str | None) -> int:
+    return len(response_text or "")
 
 
-def check_format_compliance(response_text: str, required_sections: list[str]) -> bool | None:
-    if not required_sections:
-        return None
-    return all(section.lower() in response_text.lower() for section in required_sections)
+def calculate_word_count(response_text: str | None) -> int:
+    return len(re.findall(r"\S+", response_text or ""))
 
 
-def check_constraint_satisfaction(response_text: str, constraints: list[str]) -> bool | None:
-    if not constraints:
-        return None
-    raise NotImplementedError("Constraint satisfaction checks will be implemented in Phase 2.")
+def format_benchmark_metrics(
+    *,
+    start_time: float,
+    end_time: float,
+    response_text: str | None,
+    status: BenchmarkStatus,
+    token_usage: Mapping[str, int | None] | None = None,
+) -> dict[str, int | str | None]:
+    metrics: dict[str, int | str | None] = {
+        "latency_ms": calculate_latency_ms(start_time, end_time),
+        "response_length": calculate_response_length(response_text),
+        "word_count": calculate_word_count(response_text),
+        "status": status,
+    }
+
+    for key in TOKEN_METRIC_KEYS:
+        metrics[key] = token_usage.get(key) if token_usage else None
+
+    return metrics

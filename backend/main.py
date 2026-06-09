@@ -1,10 +1,13 @@
 from fastapi import FastAPI
 
+from backend.benchmark_engine import BenchmarkEngine
 from backend.config import settings
 from backend.database import init_db
 from backend.gemini_client import GeminiClient, GeminiClientError
 from backend.prompt_strategies import generate_prompt_variants
 from backend.schemas import (
+    BenchmarkRequest,
+    BenchmarkResponse,
     GenerateStrategiesRequest,
     GenerateStrategiesResponse,
     GeneratedPrompt,
@@ -15,7 +18,7 @@ from backend.schemas import (
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.3.0",
+    version="0.5.0",
     description="API foundation for the Prompt Strategy Benchmark application.",
 )
 
@@ -53,6 +56,12 @@ def generate_strategies(request: GenerateStrategiesRequest) -> GenerateStrategie
             for variant in prompt_variants
         ]
     )
+
+
+@app.post("/benchmark", response_model=BenchmarkResponse, tags=["Benchmark"])
+async def run_benchmark(request: BenchmarkRequest) -> BenchmarkResponse:
+    engine = BenchmarkEngine()
+    return await engine.run(request)
 
 
 @app.post(

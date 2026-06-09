@@ -1,6 +1,14 @@
-from typing import Any
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+BenchmarkStatus = Literal[
+    "success",
+    "timeout",
+    "api_error",
+    "validation_error",
+    "unexpected_error",
+]
 
 
 class HealthResponse(BaseModel):
@@ -40,21 +48,33 @@ class GenerateStrategiesResponse(BaseModel):
 
 
 class BenchmarkRequest(BaseModel):
-    user_input: str = Field(..., min_length=1, description="Prompt or task to benchmark.")
-    strategies: list[str] | None = Field(
-        default=None,
-        description="Optional list of prompt strategies to evaluate later.",
-    )
+    user_input: str = Field(..., description="Prompt or task to benchmark.")
+
+    @field_validator("user_input")
+    @classmethod
+    def validate_user_input(cls, value: str) -> str:
+        cleaned_value = value.strip()
+        if not cleaned_value:
+            raise ValueError("User input cannot be empty.")
+        return cleaned_value
+
+
+class BenchmarkMetrics(BaseModel):
+    latency_ms: int = Field(..., ge=0)
+    response_length: int = Field(..., ge=0)
+    word_count: int = Field(..., ge=0)
+    status: BenchmarkStatus
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
 
 
 class BenchmarkResult(BaseModel):
     strategy_name: str
     prompt: str
-    response_text: str | None = None
-    metrics: dict[str, Any] = Field(default_factory=dict)
+    response: str | None = None
+    metrics: BenchmarkMetrics
 
 
 class BenchmarkResponse(BaseModel):
-    run_id: str
-    status: str
-    results: list[BenchmarkResult] = Field(default_factory=list)
+    results: list[BenchmarkResult]
