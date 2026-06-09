@@ -5,8 +5,12 @@ from pydantic import BaseModel, Field, field_validator
 BenchmarkStatus = Literal[
     "success",
     "timeout",
+    "rate_limit",
+    "invalid_request",
+    "authentication_error",
     "api_error",
     "validation_error",
+    "parsing_error",
     "unexpected_error",
 ]
 
@@ -73,8 +77,31 @@ class BenchmarkResult(BaseModel):
     strategy_name: str
     prompt: str
     response: str | None = None
+    error_type: str | None = None
+    error_message: str | None = None
     metrics: BenchmarkMetrics
 
 
 class BenchmarkResponse(BaseModel):
+    run_id: str | None = None
+    created_at: str | None = None
+    user_input: str | None = None
+    results: list[BenchmarkResult]
+
+
+class BenchmarkHistoryItem(BaseModel):
+    run_id: str
+    created_at: str
+    user_input: str
+    result_count: int
+
+
+class BenchmarkHistoryResponse(BaseModel):
+    runs: list[BenchmarkHistoryItem]
+
+
+class BenchmarkRunResponse(BaseModel):
+    run_id: str
+    created_at: str
+    user_input: str
     results: list[BenchmarkResult]

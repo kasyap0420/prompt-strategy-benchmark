@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
@@ -9,9 +10,18 @@ from google.genai import errors, types
 
 from backend.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 class GeminiClientError(RuntimeError):
     """Base error for Gemini client failures safe to return to API callers."""
+
+    status_code: int | None = None
+    retryable: bool = False
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class GeminiConfigurationError(GeminiClientError):
@@ -29,13 +39,31 @@ class GeminiAuthenticationError(GeminiClientError):
 class GeminiTimeoutError(GeminiClientError):
     """Raised when a Gemini request exceeds the configured timeout."""
 
+    retryable = True
+
+
+class GeminiRateLimitError(GeminiClientError):
+    """Raised when Gemini rate-limits the request."""
+
+    retryable = True
+
+
+class GeminiInvalidRequestError(GeminiClientError):
+    """Raised when Gemini rejects the request payload."""
+
 
 class GeminiNetworkError(GeminiClientError):
     """Raised when the Gemini API cannot be reached."""
 
+    retryable = True
+
 
 class GeminiAPIRequestError(GeminiClientError):
     """Raised when Gemini returns an API-level error."""
+
+
+class GeminiParsingError(GeminiClientError):
+    """Raised when a Gemini response cannot be parsed safely."""
 
 
 class GeminiUnexpectedError(GeminiClientError):
@@ -63,6 +91,8 @@ class GeminiClient:
     model_name: str = settings.gemini_model
     api_version: str = settings.gemini_api_version
     timeout_seconds: float = settings.gemini_timeout_seconds
+    max_retries: int = 2
+    retry_base_delay_seconds: float = 0.5
 
     @property
     def is_configured(self) -> bool:
@@ -79,6 +109,51 @@ class GeminiClient:
     def generate_content(self, prompt: str) -> GeminiGeneration:
         """Generate content and return text plus real provider token metadata when available."""
         cleaned_prompt = self._validate_prompt(prompt)
+        return self._generate_content_with_retries(cleaned_prompt)
+
+    async def generate_response_async(self, prompt: str) -> str:
+        """Generate content with a wall-clock timeout around the async SDK call."""
+        generation = await self.generate_content_async(prompt)
+        return generation.text
+
+    async def generate_content_async(self, prompt: str) -> GeminiGeneration:
+        """Generate content and return text plus real provider token metadata when available."""
+        cleaned_prompt = self._validate_prompt(prompt)
+        return await self._generate_content_with_retries_async(cleaned_prompt)
+
+    def _generate_content_with_retries(self, cleaned_prompt: str) -> GeminiGeneration:
+        attempts = self.max_retries + 1
+        for attempt_index in range(attempts):
+            try:
+                return self._generate_content_once(cleaned_prompt)
+            except GeminiClientError as exc:
+                if not self._should_retry(exc, attempt_index):
+                    raise
+                self._log_retry(exc, attempt_index)
+                time_to_sleep = self._retry_delay(attempt_index)
+                if time_to_sleep > 0:
+                    import time
+
+                    time.sleep(time_to_sleep)
+
+        raise GeminiUnexpectedError("Gemini retry loop exited unexpectedly.")
+
+    async def _generate_content_with_retries_async(self, cleaned_prompt: str) -> GeminiGeneration:
+        attempts = self.max_retries + 1
+        for attempt_index in range(attempts):
+            try:
+                return await self._generate_content_once_async(cleaned_prompt)
+            except GeminiClientError as exc:
+                if not self._should_retry(exc, attempt_index):
+                    raise
+                self._log_retry(exc, attempt_index)
+                delay = self._retry_delay(attempt_index)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+
+        raise GeminiUnexpectedError("Gemini retry loop exited unexpectedly.")
+
+    def _generate_content_once(self, cleaned_prompt: str) -> GeminiGeneration:
         client = self._create_client()
         try:
             response = client.models.generate_content(
@@ -92,14 +167,7 @@ class GeminiClient:
             with suppress(Exception):
                 client.close()
 
-    async def generate_response_async(self, prompt: str) -> str:
-        """Generate content with a wall-clock timeout around the async SDK call."""
-        generation = await self.generate_content_async(prompt)
-        return generation.text
-
-    async def generate_content_async(self, prompt: str) -> GeminiGeneration:
-        """Generate content and return text plus real provider token metadata when available."""
-        cleaned_prompt = self._validate_prompt(prompt)
+    async def _generate_content_once_async(self, cleaned_prompt: str) -> GeminiGeneration:
         client = self._create_client()
         async_client = client.aio
         try:
@@ -120,6 +188,22 @@ class GeminiClient:
         finally:
             with suppress(Exception):
                 await async_client.aclose()
+
+    def _should_retry(self, exc: GeminiClientError, attempt_index: int) -> bool:
+        return exc.retryable and attempt_index < self.max_retries
+
+    def _retry_delay(self, attempt_index: int) -> float:
+        return self.retry_base_delay_seconds * (2**attempt_index)
+
+    def _log_retry(self, exc: GeminiClientError, attempt_index: int) -> None:
+        logger.warning(
+            "Retrying Gemini request after %s on attempt %s/%s: status_code=%s message=%s",
+            type(exc).__name__,
+            attempt_index + 1,
+            self.max_retries + 1,
+            exc.status_code,
+            str(exc),
+        )
 
     def _create_client(self) -> genai.Client:
         self.ensure_configured()
@@ -149,10 +233,13 @@ class GeminiClient:
         )
 
     def _extract_text(self, response: Any) -> str:
-        text = getattr(response, "text", None)
+        try:
+            text = getattr(response, "text", None)
+        except Exception as exc:
+            raise GeminiParsingError("Gemini response text could not be read.") from exc
         if not text:
-            raise GeminiAPIRequestError("Gemini returned an empty response.")
-        return text
+            raise GeminiParsingError("Gemini returned an empty response.")
+        return str(text)
 
     def _read_token_count(self, usage_metadata: Any, field_name: str) -> int | None:
         value = getattr(usage_metadata, field_name, None)
@@ -179,9 +266,26 @@ class GeminiClient:
         lower_message = message.lower()
 
         if code in {401, 403} or (code == 400 and "api key" in lower_message):
-            return GeminiAuthenticationError("Gemini API key is invalid or not authorized.")
+            return GeminiAuthenticationError(
+                "Gemini API key is invalid or not authorized.",
+                status_code=code,
+            )
+        if code == 429:
+            return GeminiRateLimitError(
+                f"Gemini rate limit exceeded: {message}",
+                status_code=code,
+            )
+        if code == 400:
+            return GeminiInvalidRequestError(
+                f"Gemini invalid request: {message}",
+                status_code=code,
+            )
+        if code and 500 <= code <= 599:
+            error = GeminiAPIRequestError(f"Gemini API error ({code}): {message}", status_code=code)
+            error.retryable = True
+            return error
         if code:
-            return GeminiAPIRequestError(f"Gemini API error ({code}): {message}")
+            return GeminiAPIRequestError(f"Gemini API error ({code}): {message}", status_code=code)
         return GeminiAPIRequestError(f"Gemini API error: {message}")
 
     def _safe_error_message(self, message: str) -> str:

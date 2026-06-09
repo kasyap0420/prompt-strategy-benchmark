@@ -84,6 +84,8 @@ def test_failed_gemini_calls_are_recorded_and_execution_continues() -> None:
         "api_error",
         "unexpected_error",
     ]
+    assert response.results[0].error_type == "GeminiTimeoutError"
+    assert response.results[1].error_message == "Rate limit exceeded."
     assert response.results[0].response is None
     assert response.results[1].response is None
     assert response.results[2].response is None
@@ -130,8 +132,9 @@ def test_benchmark_endpoint_returns_structured_results(monkeypatch: pytest.Monke
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"results"}
+    assert {"run_id", "created_at", "user_input", "results"} <= set(body.keys())
     assert len(body["results"]) == 5
+    assert body["user_input"] == "Explain Docker"
     assert body["results"][0]["metrics"]["status"] == "success"
     assert body["results"][0]["metrics"]["input_tokens"] is None
 

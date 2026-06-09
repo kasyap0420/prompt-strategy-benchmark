@@ -4,8 +4,12 @@ from typing import Literal, Mapping
 BenchmarkStatus = Literal[
     "success",
     "timeout",
+    "rate_limit",
+    "invalid_request",
+    "authentication_error",
     "api_error",
     "validation_error",
+    "parsing_error",
     "unexpected_error",
 ]
 

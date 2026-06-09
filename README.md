@@ -1,6 +1,6 @@
 # Prompt Strategy Benchmark
 
-A starter application for benchmarking prompt strategies with a Python backend, FastAPI API foundation, Streamlit frontend, SQLite setup, and a clean path toward Gemini integration.
+An end-to-end benchmark application for comparing prompt strategies against Gemini responses, objective metrics, persisted benchmark history, and exportable results.
 
 ## Tech Stack
 
@@ -10,14 +10,17 @@ A starter application for benchmarking prompt strategies with a Python backend, 
 - SQLite
 - Pydantic
 - python-dotenv
+- pandas
+- requests
 - pytest
+- google-genai
 
 ## Project Structure
 
 ```text
-backend/      FastAPI app, configuration, database setup, Gemini client wrapper, strategy and benchmark foundations
-frontend/     Streamlit application foundation
-tests/        Test package placeholder
+backend/      FastAPI app, Gemini integration, prompt strategies, benchmark engine, metrics, persistence, exports
+frontend/     Streamlit application for running benchmarks and downloading exports
+tests/        Automated tests for strategies, metrics, benchmark execution, persistence, history, retrieval, and exports
 ```
 
 ## Setup
@@ -50,7 +53,27 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-5. Add local values to `.env` when ready.
+5. Add your Gemini API key to `.env`.
+
+```text
+GEMINI_API_KEY=YOUR_API_KEY_HERE
+```
+
+## Configuration
+
+Supported environment variables:
+
+```text
+APP_NAME=Prompt Strategy Benchmark
+APP_ENV=development
+GEMINI_API_KEY=YOUR_API_KEY_HERE
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_API_VERSION=v1
+GEMINI_TIMEOUT_SECONDS=30
+DATABASE_URL=sqlite:///benchmark.db
+```
+
+The Streamlit frontend reads `PROMPT_BENCHMARK_API_URL` and defaults to `http://127.0.0.1:8000`.
 
 ## Run the Backend
 
@@ -58,7 +81,7 @@ copy .env.example .env
 python run_backend.py
 ```
 
-The API will be available at `http://127.0.0.1:8000`.
+The API is available at `http://127.0.0.1:8000`.
 
 ## Run the Frontend
 
@@ -66,6 +89,65 @@ The API will be available at `http://127.0.0.1:8000`.
 streamlit run frontend/app.py
 ```
 
-## Current Phase
+## API Endpoints
 
-This repository is Phase 1 scaffolding only. Live Gemini calls, benchmark orchestration, scoring, persistence schema, and deployment are intentionally left for later phases.
+```text
+GET  /
+GET  /health
+POST /generate-strategies
+POST /benchmark
+POST /test-gemini
+GET  /benchmark/history
+GET  /benchmark/{run_id}
+GET  /benchmark/{run_id}/export/json
+GET  /benchmark/{run_id}/export/csv
+```
+
+## Benchmark Workflow
+
+1. Submit `user_input` to `POST /benchmark`.
+2. The backend generates five prompt variants:
+   - Zero-Shot
+   - Role Prompting
+   - Structured Prompting
+   - Expert Prompting
+   - Reasoning-Oriented Prompting
+3. Each prompt is sent to Gemini sequentially.
+4. The backend records response text, status, latency, response length, word count, and token usage when Gemini returns it.
+5. The run and result rows are saved to SQLite.
+6. Saved runs can be retrieved from history or exported as JSON/CSV.
+
+## Persistence
+
+SQLite persistence uses two tables:
+
+```text
+benchmark_runs
+- run_id
+- created_at
+- user_input
+
+benchmark_results
+- id
+- run_id
+- strategy_name
+- prompt
+- response
+- status
+- latency_ms
+- response_length
+- word_count
+- input_tokens
+- output_tokens
+- total_tokens
+```
+
+## Testing
+
+Run all tests:
+
+```bash
+pytest
+```
+
+The test suite uses temporary SQLite databases and fake Gemini clients where needed, so it does not require a live Gemini API call.
