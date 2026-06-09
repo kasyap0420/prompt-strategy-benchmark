@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+streamlit
+pydantic
+pydantic-settings
+python-dotenv
+pandas
+requests
+pytest
