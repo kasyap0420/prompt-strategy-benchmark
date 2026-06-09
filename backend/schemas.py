@@ -8,6 +8,16 @@ class HealthResponse(BaseModel):
     app_name: str
 
 
+class GeminiTestRequest(BaseModel):
+    prompt: str = Field(..., description="Prompt sent to Gemini for connectivity testing.")
+
+
+class GeminiTestResponse(BaseModel):
+    success: bool
+    response: str | None = None
+    error: str | None = None
+
+
 class BenchmarkRequest(BaseModel):
     user_input: str = Field(..., min_length=1, description="Prompt or task to benchmark.")
     strategies: list[str] | None = Field(

@@ -7,3 +7,5 @@ python-dotenv
 pandas
 requests
 pytest
+google-genai
+httpx
