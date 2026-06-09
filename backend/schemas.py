@@ -129,3 +129,46 @@ class BenchmarkRunResponse(BaseModel):
     ranking: list[BenchmarkRankingItem] = Field(default_factory=list)
     winners: BenchmarkWinners = Field(default_factory=BenchmarkWinners)
     benchmark_summary: str | None = None
+
+
+class AnalyticsSummaryResponse(BaseModel):
+    total_runs: int = Field(..., ge=0)
+    total_results: int = Field(..., ge=0)
+    total_successes: int = Field(..., ge=0)
+    total_failures: int = Field(..., ge=0)
+    overall_success_rate: float = Field(..., ge=0)
+
+
+class StrategyPerformanceItem(BaseModel):
+    strategy_name: str
+    total_runs: int = Field(..., ge=0)
+    wins: int = Field(..., ge=0)
+    win_rate: float = Field(..., ge=0)
+    avg_latency_ms: float | None = None
+    avg_response_length: float | None = None
+    avg_word_count: float | None = None
+    avg_input_tokens: float | None = None
+    avg_output_tokens: float | None = None
+    avg_total_tokens: float | None = None
+    success_rate: float = Field(..., ge=0)
+    failure_rate: float = Field(..., ge=0)
+
+
+class StrategyPerformanceResponse(BaseModel):
+    strategies: list[StrategyPerformanceItem]
+
+
+class AnalyticsHistoryItem(BaseModel):
+    run_id: str
+    created_at: str
+    user_input: str
+    total_results: int = Field(..., ge=0)
+    successes: int = Field(..., ge=0)
+    failures: int = Field(..., ge=0)
+    success_rate: float = Field(..., ge=0)
+    overall_winner: str | None = None
+    benchmark_summary: str | None = None
+
+
+class AnalyticsHistoryResponse(BaseModel):
+    runs: list[AnalyticsHistoryItem]

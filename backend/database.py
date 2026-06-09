@@ -8,6 +8,9 @@ from uuid import uuid4
 
 from backend.config import BASE_DIR, settings
 from backend.schemas import (
+    AnalyticsHistoryItem,
+    AnalyticsHistoryResponse,
+    AnalyticsSummaryResponse,
     BenchmarkHistoryItem,
     BenchmarkMetrics,
     BenchmarkRankingItem,
@@ -15,6 +18,8 @@ from backend.schemas import (
     BenchmarkResult,
     BenchmarkRunResponse,
     BenchmarkWinners,
+    StrategyPerformanceItem,
+    StrategyPerformanceResponse,
 )
 
 
@@ -385,3 +390,140 @@ def get_benchmark_run(run_id: str) -> BenchmarkRunResponse | None:
         ),
         benchmark_summary=run_row["benchmark_summary"],
     )
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    if denominator == 0:
+        return 0.0
+    return round(numerator / denominator, 4)
+
+
+def get_analytics_summary() -> AnalyticsSummaryResponse:
+    """Return aggregate benchmark counts from persisted history."""
+    init_db()
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM benchmark_runs) AS total_runs,
+                COUNT(benchmark_results.id) AS total_results,
+                COALESCE(SUM(CASE WHEN benchmark_results.status = 'success' THEN 1 ELSE 0 END), 0)
+                    AS total_successes
+            FROM benchmark_results
+            """
+        ).fetchone()
+
+    total_runs = row["total_runs"]
+    total_results = row["total_results"]
+    total_successes = row["total_successes"]
+    total_failures = total_results - total_successes
+    return AnalyticsSummaryResponse(
+        total_runs=total_runs,
+        total_results=total_results,
+        total_successes=total_successes,
+        total_failures=total_failures,
+        overall_success_rate=_rate(total_successes, total_results),
+    )
+
+
+def get_strategy_performance() -> StrategyPerformanceResponse:
+    """Return per-strategy performance aggregates from persisted result rows."""
+    init_db()
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                benchmark_results.strategy_name,
+                COUNT(benchmark_results.id) AS total_runs,
+                COALESCE(
+                    SUM(
+                        CASE
+                            WHEN benchmark_runs.overall_winner = benchmark_results.strategy_name
+                            THEN 1
+                            ELSE 0
+                        END
+                    ),
+                    0
+                ) AS wins,
+                COALESCE(SUM(CASE WHEN benchmark_results.status = 'success' THEN 1 ELSE 0 END), 0)
+                    AS successes,
+                AVG(benchmark_results.latency_ms) AS avg_latency_ms,
+                AVG(benchmark_results.response_length) AS avg_response_length,
+                AVG(benchmark_results.word_count) AS avg_word_count,
+                AVG(benchmark_results.input_tokens) AS avg_input_tokens,
+                AVG(benchmark_results.output_tokens) AS avg_output_tokens,
+                AVG(benchmark_results.total_tokens) AS avg_total_tokens
+            FROM benchmark_results
+            JOIN benchmark_runs ON benchmark_runs.run_id = benchmark_results.run_id
+            GROUP BY benchmark_results.strategy_name
+            ORDER BY benchmark_results.strategy_name ASC
+            """
+        ).fetchall()
+
+    strategies = []
+    for row in rows:
+        total_runs = row["total_runs"]
+        wins = row["wins"]
+        successes = row["successes"]
+        strategies.append(
+            StrategyPerformanceItem(
+                strategy_name=row["strategy_name"],
+                total_runs=total_runs,
+                wins=wins,
+                win_rate=_rate(wins, total_runs),
+                avg_latency_ms=row["avg_latency_ms"],
+                avg_response_length=row["avg_response_length"],
+                avg_word_count=row["avg_word_count"],
+                avg_input_tokens=row["avg_input_tokens"],
+                avg_output_tokens=row["avg_output_tokens"],
+                avg_total_tokens=row["avg_total_tokens"],
+                success_rate=_rate(successes, total_runs),
+                failure_rate=_rate(total_runs - successes, total_runs),
+            )
+        )
+
+    return StrategyPerformanceResponse(strategies=strategies)
+
+
+def get_analytics_history() -> AnalyticsHistoryResponse:
+    """Return run-level historical aggregates for visualization."""
+    init_db()
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                benchmark_runs.run_id,
+                benchmark_runs.created_at,
+                benchmark_runs.user_input,
+                benchmark_runs.overall_winner,
+                benchmark_runs.benchmark_summary,
+                COUNT(benchmark_results.id) AS total_results,
+                COALESCE(SUM(CASE WHEN benchmark_results.status = 'success' THEN 1 ELSE 0 END), 0)
+                    AS successes
+            FROM benchmark_runs
+            LEFT JOIN benchmark_results ON benchmark_results.run_id = benchmark_runs.run_id
+            GROUP BY benchmark_runs.run_id
+            ORDER BY benchmark_runs.created_at ASC, benchmark_runs.run_id ASC
+            """
+        ).fetchall()
+
+    runs = []
+    for row in rows:
+        total_results = row["total_results"]
+        successes = row["successes"]
+        failures = total_results - successes
+        runs.append(
+            AnalyticsHistoryItem(
+                run_id=row["run_id"],
+                created_at=row["created_at"],
+                user_input=row["user_input"],
+                total_results=total_results,
+                successes=successes,
+                failures=failures,
+                success_rate=_rate(successes, total_results),
+                overall_winner=row["overall_winner"],
+                benchmark_summary=row["benchmark_summary"],
+            )
+        )
+
+    return AnalyticsHistoryResponse(runs=runs)

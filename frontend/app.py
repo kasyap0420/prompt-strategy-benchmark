@@ -44,6 +44,24 @@ def fetch_run(run_id: str) -> dict[str, Any]:
     return response.json()
 
 
+def fetch_analytics_summary() -> dict[str, Any]:
+    response = requests.get(api_url("/analytics/summary"), timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_strategy_performance() -> list[dict[str, Any]]:
+    response = requests.get(api_url("/analytics/strategy-performance"), timeout=30)
+    response.raise_for_status()
+    return response.json()["strategies"]
+
+
+def fetch_analytics_history() -> list[dict[str, Any]]:
+    response = requests.get(api_url("/analytics/history"), timeout=30)
+    response.raise_for_status()
+    return response.json()["runs"]
+
+
 def result_rows(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for result in results:
@@ -78,6 +96,76 @@ def ranking_rows(ranking: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def render_analytics_dashboard() -> None:
+    st.divider()
+    st.header("Analytics Dashboard")
+
+    try:
+        summary = fetch_analytics_summary()
+        performance = fetch_strategy_performance()
+        analytics_history = fetch_analytics_history()
+    except requests.RequestException as exc:
+        st.warning(f"Analytics unavailable: {exc}")
+        return
+
+    summary_cols = st.columns(5)
+    summary_cols[0].metric("Runs", summary["total_runs"])
+    summary_cols[1].metric("Results", summary["total_results"])
+    summary_cols[2].metric("Successes", summary["total_successes"])
+    summary_cols[3].metric("Failures", summary["total_failures"])
+    summary_cols[4].metric("Success Rate", f"{summary['overall_success_rate'] * 100:.1f}%")
+
+    if not performance:
+        st.info("No benchmark analytics yet. Run a benchmark to populate this dashboard.")
+        return
+
+    performance_df = pd.DataFrame(performance).set_index("strategy_name")
+
+    chart_cols_1 = st.columns(2)
+    with chart_cols_1[0]:
+        st.subheader("Strategy Win Distribution")
+        st.bar_chart(performance_df["wins"])
+    with chart_cols_1[1]:
+        st.subheader("Average Latency By Strategy")
+        st.bar_chart(performance_df["avg_latency_ms"])
+
+    chart_cols_2 = st.columns(2)
+    with chart_cols_2[0]:
+        st.subheader("Success Rate By Strategy")
+        st.bar_chart(performance_df["success_rate"])
+    with chart_cols_2[1]:
+        st.subheader("Average Response Length By Strategy")
+        st.bar_chart(performance_df["avg_response_length"])
+
+    st.subheader("Token Usage By Strategy")
+    token_columns = ["avg_input_tokens", "avg_output_tokens", "avg_total_tokens"]
+    st.bar_chart(performance_df[token_columns].fillna(0))
+
+    st.subheader("Historical Run Overview")
+    if analytics_history:
+        history_df = pd.DataFrame(analytics_history)
+        overview_df = history_df[["created_at", "success_rate", "successes", "failures"]].set_index(
+            "created_at"
+        )
+        st.line_chart(overview_df[["success_rate"]])
+        st.dataframe(
+            history_df[
+                [
+                    "created_at",
+                    "user_input",
+                    "overall_winner",
+                    "success_rate",
+                    "successes",
+                    "failures",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No historical runs are available yet.")
+
+
 st.set_page_config(page_title="Prompt Strategy Benchmark", layout="wide")
 
 st.title("Prompt Strategy Benchmark")
@@ -93,7 +181,7 @@ with st.sidebar:
         except requests.RequestException as exc:
             st.error(f"Backend health check failed: {exc}")
 
-    st.subheader("History")
+    st.subheader("Historical Run Explorer")
     try:
         history_runs = fetch_history()
     except requests.RequestException as exc:
@@ -213,3 +301,5 @@ if benchmark_run:
                     st.caption(f"Error type: {result['error_type']}")
 else:
     st.info("Run a benchmark to see saved results and exports.")
+
+render_analytics_dashboard()

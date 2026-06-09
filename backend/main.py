@@ -4,11 +4,20 @@ from fastapi import FastAPI, HTTPException, Response
 
 from backend.benchmark_engine import BenchmarkEngine
 from backend.config import settings
-from backend.database import get_benchmark_run, init_db, list_benchmark_runs
+from backend.database import (
+    get_analytics_history,
+    get_analytics_summary,
+    get_benchmark_run,
+    get_strategy_performance,
+    init_db,
+    list_benchmark_runs,
+)
 from backend.export_service import benchmark_run_to_csv, benchmark_run_to_json
 from backend.gemini_client import GeminiClient, GeminiClientError
 from backend.prompt_strategies import generate_prompt_variants
 from backend.schemas import (
+    AnalyticsHistoryResponse,
+    AnalyticsSummaryResponse,
     BenchmarkHistoryResponse,
     BenchmarkRequest,
     BenchmarkResponse,
@@ -19,6 +28,7 @@ from backend.schemas import (
     GeminiTestRequest,
     GeminiTestResponse,
     HealthResponse,
+    StrategyPerformanceResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,6 +58,33 @@ def read_root() -> dict[str, str]:
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 def health_check() -> HealthResponse:
     return HealthResponse(status="ok", app_name=settings.app_name)
+
+
+@app.get(
+    "/analytics/summary",
+    response_model=AnalyticsSummaryResponse,
+    tags=["Analytics"],
+)
+def analytics_summary() -> AnalyticsSummaryResponse:
+    return get_analytics_summary()
+
+
+@app.get(
+    "/analytics/strategy-performance",
+    response_model=StrategyPerformanceResponse,
+    tags=["Analytics"],
+)
+def analytics_strategy_performance() -> StrategyPerformanceResponse:
+    return get_strategy_performance()
+
+
+@app.get(
+    "/analytics/history",
+    response_model=AnalyticsHistoryResponse,
+    tags=["Analytics"],
+)
+def analytics_history() -> AnalyticsHistoryResponse:
+    return get_analytics_history()
 
 
 @app.post(
