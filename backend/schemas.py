@@ -82,11 +82,32 @@ class BenchmarkResult(BaseModel):
     metrics: BenchmarkMetrics
 
 
+class BenchmarkRankingItem(BaseModel):
+    rank: int = Field(..., ge=1)
+    strategy_name: str
+    status: BenchmarkStatus
+    latency_ms: int = Field(..., ge=0)
+    response_length: int = Field(..., ge=0)
+    word_count: int = Field(..., ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    token_efficiency: float | None = Field(default=None, ge=0)
+
+
+class BenchmarkWinners(BaseModel):
+    overall_winner: str | None = None
+    fastest_strategy: str | None = None
+    most_detailed_strategy: str | None = None
+    most_token_efficient_strategy: str | None = None
+
+
 class BenchmarkResponse(BaseModel):
     run_id: str | None = None
     created_at: str | None = None
     user_input: str | None = None
     results: list[BenchmarkResult]
+    ranking: list[BenchmarkRankingItem] = Field(default_factory=list)
+    winners: BenchmarkWinners = Field(default_factory=BenchmarkWinners)
+    benchmark_summary: str | None = None
 
 
 class BenchmarkHistoryItem(BaseModel):
@@ -105,3 +126,6 @@ class BenchmarkRunResponse(BaseModel):
     created_at: str
     user_input: str
     results: list[BenchmarkResult]
+    ranking: list[BenchmarkRankingItem] = Field(default_factory=list)
+    winners: BenchmarkWinners = Field(default_factory=BenchmarkWinners)
+    benchmark_summary: str | None = None

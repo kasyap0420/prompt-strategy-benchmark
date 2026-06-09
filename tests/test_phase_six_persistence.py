@@ -112,7 +112,13 @@ def test_csv_export_returns_flattened_results(client: TestClient) -> None:
     assert response.headers["content-type"].startswith("text/csv")
     assert "attachment" in response.headers["content-disposition"]
 
-    rows = list(csv.DictReader(io.StringIO(response.text)))
+    lines = response.text.splitlines()
+    result_header_index = lines.index(
+        "run_id,created_at,user_input,strategy_name,prompt,response,error_type,error_message,status,"
+        "latency_ms,response_length,word_count,input_tokens,output_tokens,total_tokens"
+    )
+    result_csv = "\n".join(lines[result_header_index:])
+    rows = list(csv.DictReader(io.StringIO(result_csv)))
     assert len(rows) == 5
     assert rows[0]["run_id"] == saved_run["run_id"]
     assert rows[0]["strategy_name"] == "Zero-Shot"

@@ -37,6 +37,7 @@ def benchmark_run_to_json(run: Any) -> str:
 
 def benchmark_run_to_csv(run: Any) -> str:
     run_data = benchmark_run_to_dict(run)
+    winners = run_data["winners"]
     rows: list[dict[str, Any]] = []
     for result in run_data["results"]:
         metrics = result["metrics"]
@@ -61,6 +62,17 @@ def benchmark_run_to_csv(run: Any) -> str:
         )
 
     output = StringIO()
+    metadata_writer = csv.writer(output)
+    metadata_writer.writerow(["metadata_key", "metadata_value"])
+    metadata_writer.writerow(["overall_winner", winners["overall_winner"]])
+    metadata_writer.writerow(["fastest_strategy", winners["fastest_strategy"]])
+    metadata_writer.writerow(["most_detailed_strategy", winners["most_detailed_strategy"]])
+    metadata_writer.writerow(
+        ["most_token_efficient_strategy", winners["most_token_efficient_strategy"]]
+    )
+    metadata_writer.writerow(["benchmark_summary", run_data["benchmark_summary"]])
+    metadata_writer.writerow([])
+
     fieldnames = [
         "run_id",
         "created_at",

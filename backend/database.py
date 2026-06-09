@@ -10,9 +10,11 @@ from backend.config import BASE_DIR, settings
 from backend.schemas import (
     BenchmarkHistoryItem,
     BenchmarkMetrics,
+    BenchmarkRankingItem,
     BenchmarkResponse,
     BenchmarkResult,
     BenchmarkRunResponse,
+    BenchmarkWinners,
 )
 
 
@@ -66,10 +68,25 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS benchmark_runs (
                 run_id TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
-                user_input TEXT NOT NULL
+                user_input TEXT NOT NULL,
+                overall_winner TEXT,
+                fastest_strategy TEXT,
+                most_detailed_strategy TEXT,
+                most_token_efficient_strategy TEXT,
+                benchmark_summary TEXT
             )
             """
         )
+        _ensure_column(connection, "benchmark_runs", "overall_winner", "TEXT")
+        _ensure_column(connection, "benchmark_runs", "fastest_strategy", "TEXT")
+        _ensure_column(connection, "benchmark_runs", "most_detailed_strategy", "TEXT")
+        _ensure_column(
+            connection,
+            "benchmark_runs",
+            "most_token_efficient_strategy",
+            "TEXT",
+        )
+        _ensure_column(connection, "benchmark_runs", "benchmark_summary", "TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS benchmark_results (
@@ -93,6 +110,23 @@ def init_db() -> None:
         )
         _ensure_column(connection, "benchmark_results", "error_type", "TEXT")
         _ensure_column(connection, "benchmark_results", "error_message", "TEXT")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS benchmark_rankings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                rank INTEGER NOT NULL,
+                strategy_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                latency_ms INTEGER NOT NULL,
+                response_length INTEGER NOT NULL,
+                word_count INTEGER NOT NULL,
+                total_tokens INTEGER,
+                token_efficiency REAL,
+                FOREIGN KEY (run_id) REFERENCES benchmark_runs (run_id) ON DELETE CASCADE
+            )
+            """
+        )
 
 
 def _ensure_column(
@@ -118,10 +152,28 @@ def create_benchmark_run(user_input: str, response: BenchmarkResponse) -> Benchm
     with get_connection() as connection:
         connection.execute(
             """
-            INSERT INTO benchmark_runs (run_id, created_at, user_input)
-            VALUES (?, ?, ?)
+            INSERT INTO benchmark_runs (
+                run_id,
+                created_at,
+                user_input,
+                overall_winner,
+                fastest_strategy,
+                most_detailed_strategy,
+                most_token_efficient_strategy,
+                benchmark_summary
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (run_id, created_at, user_input),
+            (
+                run_id,
+                created_at,
+                user_input,
+                response.winners.overall_winner,
+                response.winners.fastest_strategy,
+                response.winners.most_detailed_strategy,
+                response.winners.most_token_efficient_strategy,
+                response.benchmark_summary,
+            ),
         )
         connection.executemany(
             """
@@ -159,6 +211,36 @@ def create_benchmark_run(user_input: str, response: BenchmarkResponse) -> Benchm
                     result.metrics.total_tokens,
                 )
                 for result in response.results
+            ],
+        )
+        connection.executemany(
+            """
+            INSERT INTO benchmark_rankings (
+                run_id,
+                rank,
+                strategy_name,
+                status,
+                latency_ms,
+                response_length,
+                word_count,
+                total_tokens,
+                token_efficiency
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    run_id,
+                    item.rank,
+                    item.strategy_name,
+                    item.status,
+                    item.latency_ms,
+                    item.response_length,
+                    item.word_count,
+                    item.total_tokens,
+                    item.token_efficiency,
+                )
+                for item in response.ranking
             ],
         )
 
@@ -203,7 +285,15 @@ def get_benchmark_run(run_id: str) -> BenchmarkRunResponse | None:
     with get_connection() as connection:
         run_row = connection.execute(
             """
-            SELECT run_id, created_at, user_input
+            SELECT
+                run_id,
+                created_at,
+                user_input,
+                overall_winner,
+                fastest_strategy,
+                most_detailed_strategy,
+                most_token_efficient_strategy,
+                benchmark_summary
             FROM benchmark_runs
             WHERE run_id = ?
             """,
@@ -233,6 +323,23 @@ def get_benchmark_run(run_id: str) -> BenchmarkRunResponse | None:
             """,
             (run_id,),
         ).fetchall()
+        ranking_rows = connection.execute(
+            """
+            SELECT
+                rank,
+                strategy_name,
+                status,
+                latency_ms,
+                response_length,
+                word_count,
+                total_tokens,
+                token_efficiency
+            FROM benchmark_rankings
+            WHERE run_id = ?
+            ORDER BY rank ASC
+            """,
+            (run_id,),
+        ).fetchall()
 
     return BenchmarkRunResponse(
         run_id=run_row["run_id"],
@@ -257,4 +364,24 @@ def get_benchmark_run(run_id: str) -> BenchmarkRunResponse | None:
             )
             for row in result_rows
         ],
+        ranking=[
+            BenchmarkRankingItem(
+                rank=row["rank"],
+                strategy_name=row["strategy_name"],
+                status=row["status"],
+                latency_ms=row["latency_ms"],
+                response_length=row["response_length"],
+                word_count=row["word_count"],
+                total_tokens=row["total_tokens"],
+                token_efficiency=row["token_efficiency"],
+            )
+            for row in ranking_rows
+        ],
+        winners=BenchmarkWinners(
+            overall_winner=run_row["overall_winner"],
+            fastest_strategy=run_row["fastest_strategy"],
+            most_detailed_strategy=run_row["most_detailed_strategy"],
+            most_token_efficient_strategy=run_row["most_token_efficient_strategy"],
+        ),
+        benchmark_summary=run_row["benchmark_summary"],
     )

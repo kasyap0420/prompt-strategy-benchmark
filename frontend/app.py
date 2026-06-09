@@ -32,6 +32,18 @@ def fetch_export(run_id: str, export_format: str) -> bytes:
     return response.content
 
 
+def fetch_history() -> list[dict[str, Any]]:
+    response = requests.get(api_url("/benchmark/history"), timeout=30)
+    response.raise_for_status()
+    return response.json()["runs"]
+
+
+def fetch_run(run_id: str) -> dict[str, Any]:
+    response = requests.get(api_url(f"/benchmark/{run_id}"), timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+
 def result_rows(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for result in results:
@@ -52,6 +64,20 @@ def result_rows(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def ranking_rows(ranking: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "Rank": item["rank"],
+            "Strategy": item["strategy_name"],
+            "Status": item["status"],
+            "Latency": item["latency_ms"],
+            "Word Count": item["word_count"],
+            "Token Count": item["total_tokens"],
+        }
+        for item in ranking
+    ]
+
+
 st.set_page_config(page_title="Prompt Strategy Benchmark", layout="wide")
 
 st.title("Prompt Strategy Benchmark")
@@ -66,6 +92,33 @@ with st.sidebar:
             st.success("Backend is healthy.")
         except requests.RequestException as exc:
             st.error(f"Backend health check failed: {exc}")
+
+    st.subheader("History")
+    try:
+        history_runs = fetch_history()
+    except requests.RequestException as exc:
+        history_runs = []
+        st.caption(f"History unavailable: {exc}")
+
+    if history_runs:
+        history_options = {
+            f"{run['created_at']} - {run['user_input'][:40]}": run["run_id"]
+            for run in history_runs
+        }
+        selected_history = st.selectbox(
+            "Stored runs",
+            options=list(history_options.keys()),
+            index=None,
+            placeholder="Select a historical run",
+        )
+        if selected_history and st.button("Open selected run", use_container_width=True):
+            try:
+                st.session_state.benchmark_run = fetch_run(history_options[selected_history])
+                st.success("Historical run loaded.")
+            except requests.RequestException as exc:
+                st.error(f"Could not load run: {exc}")
+    else:
+        st.caption("No saved runs yet.")
 
 user_input = st.text_area(
     "User input",
@@ -93,6 +146,27 @@ benchmark_run = st.session_state.benchmark_run
 if benchmark_run:
     run_id = benchmark_run["run_id"]
     st.divider()
+    if benchmark_run.get("benchmark_summary"):
+        st.subheader("Benchmark Summary")
+        st.info(benchmark_run["benchmark_summary"])
+
+    winners = benchmark_run.get("winners") or {}
+    st.subheader("Winners")
+    winner_cols = st.columns(4)
+    winner_labels = [
+        ("Overall Winner", winners.get("overall_winner")),
+        ("Fastest", winners.get("fastest_strategy")),
+        ("Most Detailed", winners.get("most_detailed_strategy")),
+        ("Most Efficient", winners.get("most_token_efficient_strategy")),
+    ]
+    for column, (label, value) in zip(winner_cols, winner_labels):
+        column.metric(label, value or "None")
+
+    if benchmark_run.get("ranking"):
+        st.subheader("Ranking")
+        ranking_df = pd.DataFrame(ranking_rows(benchmark_run["ranking"]))
+        st.dataframe(ranking_df, use_container_width=True, hide_index=True)
+
     st.subheader("Results")
     st.caption(f"Run ID: {run_id}")
 

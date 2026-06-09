@@ -20,13 +20,125 @@ from backend.metrics import BenchmarkStatus, format_benchmark_metrics
 from backend.prompt_strategies import PromptVariant, generate_prompt_variants, list_strategy_names
 from backend.schemas import (
     BenchmarkMetrics,
+    BenchmarkRankingItem,
     BenchmarkRequest,
     BenchmarkResponse,
     BenchmarkResult,
     BenchmarkRunResponse,
+    BenchmarkWinners,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def calculate_token_efficiency(result: BenchmarkResult) -> float | None:
+    input_tokens = result.metrics.input_tokens
+    output_tokens = result.metrics.output_tokens
+    if not input_tokens or output_tokens is None:
+        return None
+    return output_tokens / input_tokens
+
+
+def _token_efficiency_sort_value(result: BenchmarkResult) -> float:
+    return calculate_token_efficiency(result) or 0.0
+
+
+def rank_benchmark_results(results: list[BenchmarkResult]) -> list[BenchmarkRankingItem]:
+    sorted_results = sorted(
+        results,
+        key=lambda result: (
+            result.metrics.status != "success",
+            result.metrics.latency_ms,
+            -result.metrics.response_length,
+            -result.metrics.word_count,
+            -_token_efficiency_sort_value(result),
+            result.strategy_name,
+        ),
+    )
+
+    return [
+        BenchmarkRankingItem(
+            rank=index,
+            strategy_name=result.strategy_name,
+            status=result.metrics.status,
+            latency_ms=result.metrics.latency_ms,
+            response_length=result.metrics.response_length,
+            word_count=result.metrics.word_count,
+            total_tokens=result.metrics.total_tokens,
+            token_efficiency=calculate_token_efficiency(result),
+        )
+        for index, result in enumerate(sorted_results, start=1)
+    ]
+
+
+def detect_benchmark_winners(
+    results: list[BenchmarkResult],
+    ranking: list[BenchmarkRankingItem],
+) -> BenchmarkWinners:
+    successful_results = [result for result in results if result.metrics.status == "success"]
+    if not successful_results:
+        return BenchmarkWinners()
+
+    fastest = min(
+        successful_results,
+        key=lambda result: (result.metrics.latency_ms, result.strategy_name),
+    )
+    most_detailed = max(
+        successful_results,
+        key=lambda result: (
+            result.metrics.word_count,
+            result.metrics.response_length,
+            -result.metrics.latency_ms,
+            result.strategy_name,
+        ),
+    )
+
+    with_token_efficiency = [
+        result for result in successful_results if calculate_token_efficiency(result) is not None
+    ]
+    if with_token_efficiency:
+        most_efficient = max(
+            with_token_efficiency,
+            key=lambda result: (
+                calculate_token_efficiency(result) or 0.0,
+                -result.metrics.latency_ms,
+                result.strategy_name,
+            ),
+        )
+    else:
+        most_efficient = min(
+            successful_results,
+            key=lambda result: (
+                result.metrics.response_length,
+                result.metrics.word_count,
+                result.metrics.latency_ms,
+                result.strategy_name,
+            ),
+        )
+
+    overall_winner = next(
+        (item.strategy_name for item in ranking if item.status == "success"),
+        None,
+    )
+
+    return BenchmarkWinners(
+        overall_winner=overall_winner,
+        fastest_strategy=fastest.strategy_name,
+        most_detailed_strategy=most_detailed.strategy_name,
+        most_token_efficient_strategy=most_efficient.strategy_name,
+    )
+
+
+def generate_benchmark_summary(winners: BenchmarkWinners) -> str:
+    if not winners.overall_winner:
+        return "No strategy completed successfully. Review the error details for each strategy."
+
+    return (
+        f"{winners.most_detailed_strategy} produced the most detailed answer.\n"
+        f"{winners.fastest_strategy} was the fastest.\n"
+        f"{winners.most_token_efficient_strategy} was the most token-efficient.\n"
+        f"Overall winner: {winners.overall_winner}."
+    )
 
 
 class BenchmarkEngine:
@@ -42,13 +154,24 @@ class BenchmarkEngine:
         for variant in prompt_variants:
             results.append(await self._execute_variant(variant))
 
-        response = BenchmarkResponse(results=results)
+        ranking = rank_benchmark_results(results)
+        winners = detect_benchmark_winners(results, ranking)
+        benchmark_summary = generate_benchmark_summary(winners)
+        response = BenchmarkResponse(
+            results=results,
+            ranking=ranking,
+            winners=winners,
+            benchmark_summary=benchmark_summary,
+        )
         stored_run = self.persist_results(request.user_input, response)
         return BenchmarkResponse(
             run_id=stored_run.run_id,
             created_at=stored_run.created_at,
             user_input=stored_run.user_input,
             results=stored_run.results,
+            ranking=stored_run.ranking,
+            winners=stored_run.winners,
+            benchmark_summary=stored_run.benchmark_summary,
         )
 
     def prepare_prompts(self, user_input: str) -> list[PromptVariant]:
