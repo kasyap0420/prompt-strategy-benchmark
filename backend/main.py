@@ -3,11 +3,19 @@ from fastapi import FastAPI
 from backend.config import settings
 from backend.database import init_db
 from backend.gemini_client import GeminiClient, GeminiClientError
-from backend.schemas import GeminiTestRequest, GeminiTestResponse, HealthResponse
+from backend.prompt_strategies import generate_prompt_variants
+from backend.schemas import (
+    GenerateStrategiesRequest,
+    GenerateStrategiesResponse,
+    GeneratedPrompt,
+    GeminiTestRequest,
+    GeminiTestResponse,
+    HealthResponse,
+)
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.2.0",
+    version="0.3.0",
     description="API foundation for the Prompt Strategy Benchmark application.",
 )
 
@@ -30,6 +38,21 @@ def read_root() -> dict[str, str]:
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 def health_check() -> HealthResponse:
     return HealthResponse(status="ok", app_name=settings.app_name)
+
+
+@app.post(
+    "/generate-strategies",
+    response_model=GenerateStrategiesResponse,
+    tags=["Prompt Strategies"],
+)
+def generate_strategies(request: GenerateStrategiesRequest) -> GenerateStrategiesResponse:
+    prompt_variants = generate_prompt_variants(request.user_input)
+    return GenerateStrategiesResponse(
+        prompts=[
+            GeneratedPrompt(strategy_name=variant.strategy_name, prompt=variant.prompt)
+            for variant in prompt_variants
+        ]
+    )
 
 
 @app.post(

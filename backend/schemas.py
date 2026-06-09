@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class HealthResponse(BaseModel):
@@ -16,6 +16,27 @@ class GeminiTestResponse(BaseModel):
     success: bool
     response: str | None = None
     error: str | None = None
+
+
+class GenerateStrategiesRequest(BaseModel):
+    user_input: str = Field(..., description="User input used to generate prompt strategy variants.")
+
+    @field_validator("user_input")
+    @classmethod
+    def validate_user_input(cls, value: str) -> str:
+        cleaned_value = value.strip()
+        if not cleaned_value:
+            raise ValueError("User input cannot be empty.")
+        return cleaned_value
+
+
+class GeneratedPrompt(BaseModel):
+    strategy_name: str
+    prompt: str
+
+
+class GenerateStrategiesResponse(BaseModel):
+    prompts: list[GeneratedPrompt]
 
 
 class BenchmarkRequest(BaseModel):
