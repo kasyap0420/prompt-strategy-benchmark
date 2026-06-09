@@ -9,3 +9,4 @@ requests
 pytest
 google-genai
 httpx
+slowapi

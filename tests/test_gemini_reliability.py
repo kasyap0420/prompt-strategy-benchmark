@@ -30,8 +30,18 @@ class FlakyGeminiClient(GeminiClient):
     async def _generate_content_once_async(self, cleaned_prompt: str) -> GeminiGeneration:
         self.call_count += 1
         if self.call_count < 3:
-            raise GeminiRateLimitError("Gemini rate limit exceeded.", status_code=429)
+            raise GeminiTimeoutError("Temporary timeout.")
         return GeminiGeneration(text="Recovered", input_tokens=None, output_tokens=None)
+
+
+class RateLimitedGeminiClient(GeminiClient):
+    def __init__(self) -> None:
+        super().__init__(api_key="test-key", max_retries=2, retry_base_delay_seconds=0)
+        self.call_count = 0
+
+    async def _generate_content_once_async(self, cleaned_prompt: str) -> GeminiGeneration:
+        self.call_count += 1
+        raise GeminiRateLimitError("Gemini rate limit exceeded.", status_code=429)
 
 
 class MissingTokenMetadataResponse:
@@ -69,13 +79,22 @@ class ReliabilityFailingGeminiClient:
         return GeminiGeneration(text="success")
 
 
-def test_rate_limit_errors_are_retryable_and_can_recover() -> None:
+def test_transient_errors_are_retryable_and_can_recover() -> None:
     client = FlakyGeminiClient()
 
     generation = asyncio.run(client.generate_content_async("hello"))
 
     assert generation.text == "Recovered"
     assert client.call_count == 3
+
+
+def test_rate_limit_errors_do_not_retry() -> None:
+    client = RateLimitedGeminiClient()
+
+    with pytest.raises(GeminiRateLimitError):
+        asyncio.run(client.generate_content_async("hello"))
+
+    assert client.call_count == 1
 
 
 def test_api_error_mapping_distinguishes_rate_limit_invalid_and_authentication() -> None:
@@ -88,6 +107,7 @@ def test_api_error_mapping_distinguishes_rate_limit_invalid_and_authentication()
 
     assert isinstance(rate_limit, GeminiRateLimitError)
     assert rate_limit.status_code == 429
+    assert rate_limit.retryable is False
     assert isinstance(invalid_request, GeminiInvalidRequestError)
     assert invalid_request.status_code == 400
     assert isinstance(authentication, GeminiAuthenticationError)

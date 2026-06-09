@@ -1,13 +1,20 @@
 import logging
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from backend.benchmark_engine import BenchmarkEngine
 from backend.config import settings
 from backend.database import (
+    consume_daily_budget,
     get_analytics_history,
     get_analytics_summary,
     get_benchmark_run,
+    get_cached_benchmark_run,
+    get_daily_budget_usage,
     get_strategy_performance,
     init_db,
     list_benchmark_runs,
@@ -33,11 +40,34 @@ from backend.schemas import (
 
 logger = logging.getLogger(__name__)
 
+
+def get_rate_limit_key(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",", maxsplit=1)[0].strip()
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=get_rate_limit_key)
+
+
 app = FastAPI(
     title=settings.app_name,
     version="0.6.0",
     description="End-to-end API for benchmarking prompt strategies.",
 )
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": "Rate limit exceeded. Please wait before trying again.",
+            "error": str(exc),
+        },
+    )
 
 
 @app.on_event("startup")
@@ -103,9 +133,38 @@ def generate_strategies(request: GenerateStrategiesRequest) -> GenerateStrategie
 
 
 @app.post("/benchmark", response_model=BenchmarkResponse, tags=["Benchmark"])
-async def run_benchmark(request: BenchmarkRequest) -> BenchmarkResponse:
+@limiter.limit("3/minute")
+async def run_benchmark(request: Request, benchmark_request: BenchmarkRequest) -> BenchmarkResponse:
+    cached_run = get_cached_benchmark_run(benchmark_request.user_input)
+    current_budget = get_daily_budget_usage(settings.benchmark_daily_limit)
+    if cached_run is not None:
+        return BenchmarkResponse(
+            run_id=cached_run.run_id,
+            created_at=cached_run.created_at,
+            user_input=cached_run.user_input,
+            results=cached_run.results,
+            ranking=cached_run.ranking,
+            winners=cached_run.winners,
+            benchmark_summary=cached_run.benchmark_summary,
+            cached=True,
+            daily_budget=current_budget,
+        )
+
+    daily_budget = consume_daily_budget(settings.benchmark_daily_limit)
+    if daily_budget is None:
+        budget = get_daily_budget_usage(settings.benchmark_daily_limit)
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": "Daily benchmark request budget reached. Try again tomorrow.",
+                "daily_budget": budget.model_dump(),
+            },
+        )
+
     engine = BenchmarkEngine()
-    return await engine.run(request)
+    response = await engine.run(benchmark_request)
+    response.daily_budget = daily_budget
+    return response
 
 
 @app.get(
@@ -159,10 +218,11 @@ def export_benchmark_csv(run_id: str) -> Response:
     response_model_exclude_none=True,
     tags=["Gemini"],
 )
-async def test_gemini(request: GeminiTestRequest) -> GeminiTestResponse:
+@limiter.limit("10/minute")
+async def test_gemini(request: Request, gemini_request: GeminiTestRequest) -> GeminiTestResponse:
     client = GeminiClient()
     try:
-        response_text = await client.generate_response_async(request.prompt)
+        response_text = await client.generate_response_async(gemini_request.prompt)
         return GeminiTestResponse(success=True, response=response_text)
     except GeminiClientError as exc:
         logger.exception(

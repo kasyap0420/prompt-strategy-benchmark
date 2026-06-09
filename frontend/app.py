@@ -23,6 +23,23 @@ def run_benchmark(user_input: str) -> dict[str, Any]:
     return response.json()
 
 
+def format_request_error(exc: requests.RequestException) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return str(exc)
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text or str(exc)
+
+    detail = body.get("detail")
+    if isinstance(detail, dict):
+        return detail.get("message", str(detail))
+    if isinstance(detail, str):
+        return detail
+    return body.get("error", str(exc))
+
+
 def fetch_export(run_id: str, export_format: str) -> bytes:
     response = requests.get(
         api_url(f"/benchmark/{run_id}/export/{export_format}"),
@@ -225,9 +242,16 @@ if st.button("Run Benchmark", type="primary", use_container_width=True):
         with st.spinner("Running all prompt strategies..."):
             try:
                 st.session_state.benchmark_run = run_benchmark(cleaned_input)
-                st.success("Benchmark completed and saved.")
+                if st.session_state.benchmark_run.get("cached"):
+                    st.info("Loaded cached benchmark result.")
+                else:
+                    st.success("Benchmark completed and saved.")
             except requests.RequestException as exc:
-                st.error(f"Benchmark failed: {exc}")
+                status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                if status_code == 429:
+                    st.warning(format_request_error(exc))
+                else:
+                    st.error(f"Benchmark failed: {format_request_error(exc)}")
 
 benchmark_run = st.session_state.benchmark_run
 
@@ -237,6 +261,16 @@ if benchmark_run:
     if benchmark_run.get("benchmark_summary"):
         st.subheader("Benchmark Summary")
         st.info(benchmark_run["benchmark_summary"])
+
+    status_cols = st.columns(2)
+    status_cols[0].metric("Cache", "Hit" if benchmark_run.get("cached") else "Miss")
+    daily_budget = benchmark_run.get("daily_budget")
+    if daily_budget:
+        status_cols[1].metric(
+            "Daily Budget",
+            f"{daily_budget['used']} / {daily_budget['limit']}",
+            delta=f"{daily_budget['remaining']} remaining",
+        )
 
     winners = benchmark_run.get("winners") or {}
     st.subheader("Winners")

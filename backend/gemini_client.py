@@ -45,8 +45,6 @@ class GeminiTimeoutError(GeminiClientError):
 class GeminiRateLimitError(GeminiClientError):
     """Raised when Gemini rate-limits the request."""
 
-    retryable = True
-
 
 class GeminiInvalidRequestError(GeminiClientError):
     """Raised when Gemini rejects the request payload."""

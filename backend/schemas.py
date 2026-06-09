@@ -100,6 +100,13 @@ class BenchmarkWinners(BaseModel):
     most_token_efficient_strategy: str | None = None
 
 
+class DailyBudgetUsage(BaseModel):
+    date: str
+    used: int = Field(..., ge=0)
+    limit: int = Field(..., ge=0)
+    remaining: int = Field(..., ge=0)
+
+
 class BenchmarkResponse(BaseModel):
     run_id: str | None = None
     created_at: str | None = None
@@ -108,6 +115,8 @@ class BenchmarkResponse(BaseModel):
     ranking: list[BenchmarkRankingItem] = Field(default_factory=list)
     winners: BenchmarkWinners = Field(default_factory=BenchmarkWinners)
     benchmark_summary: str | None = None
+    cached: bool = False
+    daily_budget: DailyBudgetUsage | None = None
 
 
 class BenchmarkHistoryItem(BaseModel):
@@ -129,6 +138,8 @@ class BenchmarkRunResponse(BaseModel):
     ranking: list[BenchmarkRankingItem] = Field(default_factory=list)
     winners: BenchmarkWinners = Field(default_factory=BenchmarkWinners)
     benchmark_summary: str | None = None
+    cached: bool = False
+    daily_budget: DailyBudgetUsage | None = None
 
 
 class AnalyticsSummaryResponse(BaseModel):

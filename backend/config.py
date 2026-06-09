@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     gemini_api_version: str = Field(default="v1", alias="GEMINI_API_VERSION")
     gemini_timeout_seconds: float = Field(default=30.0, alias="GEMINI_TIMEOUT_SECONDS")
     database_url: str = Field(default="sqlite:///benchmark.db", alias="DATABASE_URL")
+    benchmark_daily_limit: int = Field(default=100, alias="BENCHMARK_DAILY_LIMIT")
 
     if SettingsConfigDict is not None:
         model_config = SettingsConfigDict(env_file=BASE_DIR / ".env", extra="ignore")

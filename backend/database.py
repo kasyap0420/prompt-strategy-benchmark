@@ -18,6 +18,7 @@ from backend.schemas import (
     BenchmarkResult,
     BenchmarkRunResponse,
     BenchmarkWinners,
+    DailyBudgetUsage,
     StrategyPerformanceItem,
     StrategyPerformanceResponse,
 )
@@ -129,6 +130,14 @@ def init_db() -> None:
                 total_tokens INTEGER,
                 token_efficiency REAL,
                 FOREIGN KEY (run_id) REFERENCES benchmark_runs (run_id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS benchmark_usage (
+                date TEXT PRIMARY KEY,
+                benchmark_requests_used INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -389,6 +398,102 @@ def get_benchmark_run(run_id: str) -> BenchmarkRunResponse | None:
             most_token_efficient_strategy=run_row["most_token_efficient_strategy"],
         ),
         benchmark_summary=run_row["benchmark_summary"],
+    )
+
+
+def get_cached_benchmark_run(user_input: str) -> BenchmarkRunResponse | None:
+    """Return the newest stored run for an identical prompt, if one exists."""
+    init_db()
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT run_id
+            FROM benchmark_runs
+            WHERE user_input = ?
+            ORDER BY created_at DESC, run_id DESC
+            LIMIT 1
+            """,
+            (user_input,),
+        ).fetchone()
+
+    if row is None:
+        return None
+    return get_benchmark_run(row["run_id"])
+
+
+def _usage_date() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def get_daily_budget_usage(limit: int) -> DailyBudgetUsage:
+    """Return today's benchmark request usage."""
+    init_db()
+    date = _usage_date()
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO benchmark_usage (date, benchmark_requests_used)
+            VALUES (?, 0)
+            """,
+            (date,),
+        )
+        row = connection.execute(
+            """
+            SELECT benchmark_requests_used
+            FROM benchmark_usage
+            WHERE date = ?
+            """,
+            (date,),
+        ).fetchone()
+
+    used = row["benchmark_requests_used"] if row else 0
+    return DailyBudgetUsage(
+        date=date,
+        used=used,
+        limit=limit,
+        remaining=max(0, limit - used),
+    )
+
+
+def consume_daily_budget(limit: int) -> DailyBudgetUsage | None:
+    """Increment today's benchmark usage if budget remains."""
+    init_db()
+    date = _usage_date()
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO benchmark_usage (date, benchmark_requests_used)
+            VALUES (?, 0)
+            """,
+            (date,),
+        )
+        current_row = connection.execute(
+            """
+            SELECT benchmark_requests_used
+            FROM benchmark_usage
+            WHERE date = ?
+            """,
+            (date,),
+        ).fetchone()
+        used = current_row["benchmark_requests_used"] if current_row else 0
+        if used >= limit:
+            return None
+
+        used += 1
+        connection.execute(
+            """
+            UPDATE benchmark_usage
+            SET benchmark_requests_used = ?
+            WHERE date = ?
+            """,
+            (used, date),
+        )
+
+    return DailyBudgetUsage(
+        date=date,
+        used=used,
+        limit=limit,
+        remaining=max(0, limit - used),
     )
 
 
